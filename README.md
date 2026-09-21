@@ -24,6 +24,10 @@ wildfire-pred/
 │       ├── era5_preprocessing.py
 │       ├── sentinel1_preprocessing.py
 │       └── sentinel2_preprocessing.py
+├── docs/
+│   ├── dataset_README.md
+│   ├── devlog.md
+│   └── project_state.md
 ├── model/
 │   ├── architecture.py
 │   ├── augmentation.py
@@ -34,10 +38,18 @@ wildfire-pred/
 │   └── hyperparameter_sweep.py
 │   └── nbr_burn_severity_calculator.py
 │   └── run_inference.py
+├── tests/
+│   ├── conftest.py
+│   ├── test_burn_severity_classification.py
+│   ├── test_dataset_imputation.py
+│   ├── test_fwi_calculator.py
+│   ├── test_sentinel2_indices.py
+│   └── test_zonal_aggregator.py
 ├── training/
 │   └── train.py
 ├── utils/
 │   └── geo_utils.py
+├── .gitignore
 ├── LICENSE
 ├── README.md
 └── env.yml
@@ -110,18 +122,17 @@ Right now the model is doing same-day classification, not true forward forecasti
 
 Also worth noting that I tested the functionality of my inference and burn severity scripts on a retained sample of fire/control pairs that the model was already trained on. So if you decide to run inference on one of the dataset scenes and get a suspiciously strong result, that's the model recognizing data it has already seen. I hope to curate and add a testing dataset that can truly evaluate my model's prediction powers soon. 
 
-## Immediate TO-DOs
-
-Additions (in order of importance) yet to implement include: 
-- Extra Test Cases 
-- Documentation
 
 ## Future Work
 
 With every passing year, larger and more deadly wildfires ravage more of the world. Due to how different eco-systems contribute to different conditions for wildfire ignitions, I limited the region of my model to North America but I'd like to extend it to be able to predict on 
 more fire-prone regions globally. Sub-saharan Africa, Australia, and Southern Europe are three regions I'd like to incorporate into future 
 training sets for my wildfire prediction model. More immediately, Northern Canada is the first area I would focus on due to how similar the
-eco-systems of Alaska and the Northwestern United States are to it.
+eco-systems of Alaska and the Northwestern United States are to it. But before that, there are more immediate project tickets to address. See 
+`docs/project_state.md` for more.
+
+## AI Assistance
+Portions of this project's scripts, tests, and debugging were developed with assistance from Claude (Anthropic), specifically Sonnet 5, used as a coding assistant throughout development. All outputs were reviewed and verified by @AroonSankoh.
 
 ## License
 

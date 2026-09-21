@@ -7,16 +7,6 @@ __pycache__/
 *.grib
 *.idx
 
-# Folders
-AK-Satellite-Imagery-Wildfire-Prediction/
-docs/
-
-# Scripts
-scripts/collect_fwi_era5.py
-scripts/query_shape_file.py
-scripts/build_tile_cache.py.local_bak
-scripts/rebuild_era5_stats.py
-
 # Ignore raw satellite data
 *.SAFE/
 Sentinel1_pre/

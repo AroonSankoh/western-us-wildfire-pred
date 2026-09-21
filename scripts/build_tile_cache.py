@@ -1,15 +1,28 @@
 """
-This script is a one-time preprocessing pass. It walks the fires/ and controls/ directories in S3, 
-downloads and unzips each scene's S1_pre, S2_pre, and ERA5 product, then runs them through the existing 
-loaders and aggregate, and caches the resulting per-scene `tiles` dict to disk (and optionally backs up to S3).
+This script is a one-time preprocessing pass that turns raw S1/S2/ERA5 scenes into
+cached per-scene `tiles` dicts on disk, so training and inference never have to redo 
+any loading or aggregating logic.
+
+Two sources are supported:
+  --source s3 (default): walks the fires/ and controls/ prefixes in your @Aroon-Sankoh's 
+    personal bucket, downloading and unzipping each scene. Requires AWS credentials and 
+    access to @Aroon-Sankoh's bucket.
+  --source local: processes scenes already sitting on disk, e.g. downloaded from the
+    published HuggingFace dataset (via snapshot_download or the huggingface-cli) rather
+    than needing any AWS access at all. --local-dir must contain fires/ and controls/
+    subfolders laid out exactly like the published dataset (state/scene_id/ folders,
+    each with metadata.json, S1_*_pre.SAFE, S2_*_pre.SAFE, and one *.grib file, which
+    is the same layout run_inference.py and nbr_burn_severity_calculator.py already expect).
 
 Usage:
-    python build_tile_cache.py --limit 3               # test on 3 scenes
-    python build_tile_cache.py                         # full run
-    python build_tile_cache.py --skip-existing         # resume after interruption
+    python build_tile_cache.py --limit 3                              # S3, test on 3 scenes
+    python build_tile_cache.py                                        # S3, full run
+    python build_tile_cache.py --skip-existing                        # S3, resume after interruption
+    python build_tile_cache.py --source local --local-dir ~/hf_dataset  # local, no AWS needed
 """
 
 import argparse
+import functools
 import glob
 import json
 import os
@@ -84,6 +97,18 @@ def discover_scenes(kind):
     return [(k, k.rsplit("/", 1)[0] + "/") for k in meta_keys]
 
 
+def discover_scenes_local(local_dir, kind):
+    """
+    Local directory equivalent of discover_scenes(). It walks <local_dir>/fires/ or
+    <local_dir>/controls/ for state/scene_id/metadata.json and matches the published
+    dataset's exact layout.
+    """
+    top_prefix = FIRES_PREFIX if kind == "fire" else CONTROLS_PREFIX
+    pattern = os.path.join(local_dir, top_prefix, "*", "*", "metadata.json")
+    meta_paths = sorted(glob.glob(pattern))
+    return [(p, os.path.dirname(p)) for p in meta_paths]
+
+
 def resolve_zip_key(scene_prefix, contents_value):
     """
     Resolves a metadata.json contents value to the actual S3 zip key. The underlying zip structure of a
@@ -144,6 +169,26 @@ def download_grib(grib_key, dest_dir):
     local_path = os.path.join(dest_dir, os.path.basename(grib_key))
     with_retries(s3.download_file, BUCKET_NAME, grib_key, local_path, label=f"download({grib_key})")
     return local_path
+
+
+def ensure_extracted_safe_dir(path, extract_dir, label):
+    """
+    Local directory equivalent of download_and_extract() for a scene already on disk. 
+    """
+    if os.path.isdir(path):
+        nested = glob.glob(os.path.join(path, "*.SAFE"))
+        if len(nested) > 1:
+            raise ValueError(f"Expected at most one nested .SAFE dir under {path}, found {nested}")
+        return nested[0] if nested else path
+
+    os.makedirs(extract_dir, exist_ok=True)
+    with zipfile.ZipFile(path, "r") as zf:
+        zf.extractall(extract_dir)
+
+    safe_dirs = glob.glob(os.path.join(extract_dir, "*.SAFE"))
+    if len(safe_dirs) != 1:
+        raise ValueError(f"Expected exactly one .SAFE dir after extracting {path}, found {safe_dirs}")
+    return safe_dirs[0]
 
 
 def glob_one(pattern, label):
@@ -258,8 +303,77 @@ def process_scene(metadata_key, scene_prefix, kind, tmp_root):
         shutil.rmtree(scene_tmp, ignore_errors=True)
 
 
+def process_scene_local(metadata_path, scene_dir, kind, tmp_root):
+    """
+    Local-dir equivalent of process_scene(), for a scene already sitting on disk
+    (e.g. downloaded from the published HuggingFace dataset) instead of S3.
+    """
+    t0 = time.time()
+    with open(metadata_path) as f:
+        meta = json.load(f)
+
+    scene_id = meta.get("control_id") or meta["fire_name"]
+    scene_tmp = os.path.join(tmp_root, scene_id.replace("/", "_"))
+    os.makedirs(scene_tmp, exist_ok=True)
+
+    try:
+        _log(scene_id, "resolving local scene files...", t0)
+        s1_outer = glob_one(os.path.join(scene_dir, "S1_*_pre.SAFE"), "S1 pre-scene")
+        s2_outer = glob_one(os.path.join(scene_dir, "S2_*_pre.SAFE"), "S2 pre-scene")
+        era5_local = glob_one(os.path.join(scene_dir, "*.grib"), "ERA5 grib")
+
+        _log(scene_id, "extracting S1_pre (if zipped)...", t0)
+        s1_safe_dir = ensure_extracted_safe_dir(s1_outer, os.path.join(scene_tmp, "s1"), "S1 pre-scene")
+
+        _log(scene_id, "extracting S2_pre (if zipped)...", t0)
+        s2_safe_dir = ensure_extracted_safe_dir(s2_outer, os.path.join(scene_tmp, "s2"), "S2 pre-scene")
+
+        dem_dir = os.path.join(scene_tmp, "dem")
+        _log(scene_id, "loading S1 bands (calibration + RTC, includes DEM download)...", t0)
+        s1_data = load_s1_pre(s1_safe_dir, dem_dir)
+
+        _log(scene_id, "loading S2 bands...", t0)
+        s2_data = load_s2_pre(s2_safe_dir)
+
+        _log(scene_id, "loading ERA5 vars...", t0)
+        cutoff_datetime = era5_cutoff_from_key(era5_local)
+        era5_data = load_era5_vars(era5_local, cutoff_datetime=cutoff_datetime)
+
+        _log(scene_id, "aggregating into tiles...", t0)
+        tiles = aggregate(s1_data, s2_data, era5_data)
+        _log(scene_id, f"done -- {len(tiles)} tiles", t0)
+
+        label = 1.0 if kind == "fire" else 0.0
+        record = {
+            "scene_id": scene_id,
+            "kind": kind,
+            "label": label,
+            "fire_name": meta.get("fire_name"),
+            "event_id": meta.get("event_id"),
+            "matched_fire_event_id": meta.get("matched_fire_event_id"),
+            "tiles": tiles,
+        }
+        return record, None
+    except Exception as e:
+        return None, f"{scene_id}: {e}\n{traceback.format_exc()}"
+    finally:
+        shutil.rmtree(scene_tmp, ignore_errors=True)
+
+
 def build_arg_parser():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--source", choices=["s3", "local"], default="s3",
+                         help="'s3' (default): pull scenes from an S3 bucket, requires AWS credentials. "
+                              "'local': process scenes already on disk (e.g. downloaded from the "
+                              "published HuggingFace dataset) -- no AWS access needed at all.")
+    parser.add_argument("--local-dir", default=None,
+                         help="Required with --source local. Root dir containing fires/ and controls/ "
+                              "subfolders laid out exactly like the published dataset.")
+    parser.add_argument("--bucket-name", default=BUCKET_NAME,
+                         help="S3 bucket to pull from with --source s3 -- point this at your own bucket "
+                              "if you've collected your own scenes (defaults to the author's own).")
+    parser.add_argument("--fires-prefix", default=FIRES_PREFIX)
+    parser.add_argument("--controls-prefix", default=CONTROLS_PREFIX)
     parser.add_argument("--cache-dir", default="tile_cache")
     parser.add_argument("--tmp-dir", default="/tmp/wildfire_extract")
     parser.add_argument("--s3-cache-prefix", default="cache/tiles/")
@@ -276,20 +390,24 @@ def _record_failure(error, failures_log_path):
         f.write(error + "\n\n")
 
 
-def cache_path_for(cache_dir, scene_prefix):
+def cache_path_for(cache_dir, cache_relpath):
     """
-    Mirrors the scene's full S3 prefix under cache_dir, implicitly rebuilding the structure of the source dataset.
+    Mirrors the scene's relative fires/{state}/{scene}/ or controls/{state}/{scene}/
+    path under cache_dir, implicitly rebuilding the structure of the source dataset --
+    source-agnostic, works the same for an S3 key prefix or a local folder path.
     """
-    return os.path.join(cache_dir, scene_prefix.rstrip("/") + ".pkl")
+    return os.path.join(cache_dir, cache_relpath.rstrip("/") + ".pkl")
 
 
-def process_and_cache_scene(metadata_key, scene_prefix, kind, args, failures_log_path):
+def process_and_cache_scene(process_fn, cache_relpath, args, failures_log_path):
     """
-    Runs one scene through process_scene() and either caches its result to disk (and optionally uploads to S3) or logs
-    the failure. Returns True/False for success/failure, or None if the scene was skipped because it was already cached.
+    Runs process_fn() and either caches the result to disk (and optionally uploads to S3) or 
+    logs the failure. cache_relpath (e.g. "fires/AK/CULTAS_CREEK_fire") does not depend on source
+    and determines both the display name and the on-disk cache path. Returns True/False 
+    for success/failure, or None if skipped because it was already cached.
     """
-    scene_id = scene_prefix.rstrip("/").rsplit("/", 1)[-1]
-    out_path = cache_path_for(args.cache_dir, scene_prefix)
+    scene_id = cache_relpath.rstrip("/").rsplit("/", 1)[-1]
+    out_path = cache_path_for(args.cache_dir, cache_relpath)
 
     if args.skip_existing and os.path.exists(out_path):
         print(f"  [skip] {scene_id} (already cached)")
@@ -297,7 +415,7 @@ def process_and_cache_scene(metadata_key, scene_prefix, kind, args, failures_log
 
     print(f"  [processing] {scene_id} ...")
     try:
-        record, error = run_with_timeout(process_scene, metadata_key, scene_prefix, kind, args.tmp_dir)
+        record, error = run_with_timeout(process_fn)
     except SceneTimeout as e:
         record, error = None, f"{scene_id}: TIMEOUT -- {e}"
 
@@ -309,7 +427,7 @@ def process_and_cache_scene(metadata_key, scene_prefix, kind, args, failures_log
     with open(out_path, "wb") as f:
         pickle.dump(record, f)
     if args.upload_to_s3:
-        s3.upload_file(out_path, BUCKET_NAME, args.s3_cache_prefix + scene_prefix.rstrip("/") + ".pkl")
+        s3.upload_file(out_path, BUCKET_NAME, args.s3_cache_prefix + cache_relpath.rstrip("/") + ".pkl")
 
     print(f"  [done] {scene_id} -> {len(record['tiles'])} tiles")
     return True
@@ -323,6 +441,14 @@ def main():
     """
     args = build_arg_parser().parse_args()
 
+    if args.source == "local" and not args.local_dir:
+        raise ValueError("--local-dir is required when --source local is set.")
+
+    global BUCKET_NAME, FIRES_PREFIX, CONTROLS_PREFIX
+    BUCKET_NAME = args.bucket_name
+    FIRES_PREFIX = args.fires_prefix
+    CONTROLS_PREFIX = args.controls_prefix
+
     os.makedirs(args.cache_dir, exist_ok=True)
     os.makedirs(args.tmp_dir, exist_ok=True)
 
@@ -331,13 +457,23 @@ def main():
     processed = 0
 
     for kind in ("fire", "control"):
-        scenes = discover_scenes(kind)
+        if args.source == "local":
+            scenes = discover_scenes_local(args.local_dir, kind)
+        else:
+            scenes = discover_scenes(kind)
         if args.limit:
             scenes = scenes[: args.limit]
-        print(f"\n=== {kind}: {len(scenes)} scenes ===")
+        print(f"\n=== {kind}: {len(scenes)} scenes (source: {args.source}) ===")
 
-        for metadata_key, scene_prefix in scenes:
-            result = process_and_cache_scene(metadata_key, scene_prefix, kind, args, failures_log_path)
+        for meta_ref, scene_ref in scenes:
+            if args.source == "local":
+                cache_relpath = os.path.relpath(scene_ref, args.local_dir).replace(os.sep, "/")
+                process_fn = functools.partial(process_scene_local, meta_ref, scene_ref, kind, args.tmp_dir)
+            else:
+                cache_relpath = scene_ref.rstrip("/")
+                process_fn = functools.partial(process_scene, meta_ref, scene_ref, kind, args.tmp_dir)
+
+            result = process_and_cache_scene(process_fn, cache_relpath, args, failures_log_path)
             if result is True:
                 processed += 1
             elif result is False:
