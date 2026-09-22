@@ -6,6 +6,23 @@ __pycache__/
 *.nc
 *.grib
 *.idx
+*.env
+
+# Ignore data collection scripts/notebooks
+notebooks/
+scripts/control_collection_pipeline.py
+validate_controls.py
+
+# Ignore script outputs
+tile_cache/
+outputs/
+sweeps/
+checkpoints/
+inference/
+
+# Ignore geospatial resources
+DEM/
+MTBS/
 
 # Ignore raw satellite data
 *.SAFE/
@@ -17,4 +34,3 @@ S2_*/
 # Ignore macOS system files
 .DS_Store
 **/.DS_Store
-notebooks/

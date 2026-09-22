@@ -68,7 +68,7 @@ conda activate wildfire-pred
 A full scene includes Sentinel-1 pre and post fire SAFE files, Sentinel-2 pre and post SAFE files, an ERA-5 grib file, and a metadata.json with details of the contents of each asset within the scene.
 Each fire is paired with three controls that match the fires EPA Level III Eco-region of the fire. 125 fires and 375 control scenes collected over seven US states (Alaska, California, Idaho, Montana, Nevada, Oregon, Washington) comprise the full dataset. 
 *Important Note:* All scripts described below assume a fire scene follows the flat structure within my dataset, as in all source files are on the 
-same directory level that is one level below the scene directory itself. You can find the full dataset I used for model training and download individual scenes here: (https://huggingface.co/datasets/aroon-sankoh/wildfire-prediction).
+same directory level that is one level below the scene directory itself. You can find the full dataset I used for model training and download individual scenes here: (https://huggingface.co/datasets/aroon-sankoh/western-us-wildfire-prediction).
 
 ## Usage 
 
