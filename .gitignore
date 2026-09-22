@@ -6,9 +6,18 @@ __pycache__/
 *.nc
 *.grib
 *.idx
+*.env
 
-# Folders
-AK-Satellite-Imagery-Wildfire-Prediction/
+# Ignore script outputs
+tile_cache/
+outputs/
+sweeps/
+checkpoints/
+inference/
+
+# Ignore geospatial resources
+DEM/
+MTBS/
 
 # Ignore raw satellite data
 *.SAFE/
@@ -20,6 +29,3 @@ S2_*/
 # Ignore macOS system files
 .DS_Store
 **/.DS_Store
-
-# Ignore .env
-.env
