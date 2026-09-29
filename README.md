@@ -129,7 +129,7 @@ With every passing year, larger and more deadly wildfires ravage more of the wor
 more fire-prone regions globally. Sub-saharan Africa, Australia, and Southern Europe are three regions I'd like to incorporate into future 
 training sets for my wildfire prediction model. More immediately, Northern Canada is the first area I would focus on due to how similar the
 eco-systems of Alaska and the Northwestern United States are to it. But before that, there are more immediate project tickets to address. See 
-`docs/project_state.md` for more. If you are curious about the full story behind this project, check out this [Substack article]([url](https://aroonsankoh.substack.com/p/an-ai-wildfire-prediction-model?r=25n50a&utm_campaign=post&utm_medium=web&showWelcomeOnShare=true)) I wrote detailing my motivation and development process. 
+`docs/project_state.md` for more. If you are curious about the full story behind this project, check out this Substack article I wrote detailing my motivation and development process (https://aroonsankoh.substack.com/p/an-ai-wildfire-prediction-model?r=25n50a&utm_campaign=post&utm_medium=web&showWelcomeOnShare=true).
 
 ## AI Assistance
 Portions of this project's scripts, tests, and debugging were developed with assistance from Claude (Anthropic), specifically Sonnet 5, used as a coding assistant throughout development. All outputs were reviewed and verified by @AroonSankoh.
